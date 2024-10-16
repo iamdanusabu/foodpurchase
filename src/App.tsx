@@ -14,7 +14,10 @@ function App() {
         <Routes>
           <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
           <Route path="/register" element={!user ? <Register /> : <Navigate to="/" />} />
-          <Route path="/" element={<FoodPurchaseTracker />} />
+          <Route
+            path="/"
+            element={user ? <FoodPurchaseTracker /> : <Navigate to="/login" />}
+          />
         </Routes>
       </div>
     </Router>
