@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase';
-import { format, parse, eachDayOfInterval } from 'date-fns';
+import { format, parse } from 'date-fns';
 import { Printer, RefreshCw, Calendar } from 'lucide-react';
 
 interface FoodPurchase {
@@ -15,10 +15,10 @@ const MEAL_PRICE = 40;
 const TOTAL_BUDGET = 1000;
 
 function FoodPurchaseTracker() {
-  const [startDate, setStartDate] = useState(() => localStorage.getItem('startDate') || '');
-  const [endDate, setEndDate] = useState(() => localStorage.getItem('endDate') || '');
   const [foodPurchases, setFoodPurchases] = useState<FoodPurchase[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   // Calculate totals
   const totalCheckboxCount = foodPurchases.reduce((total, purchase) => 
@@ -27,84 +27,9 @@ function FoodPurchaseTracker() {
   const totalPrice = totalCheckboxCount * MEAL_PRICE;
   const moneyRemaining = TOTAL_BUDGET - totalPrice;
 
-  // Rest of the existing hooks and functions remain the same...
   useEffect(() => {
-    const loadInitialData = async () => {
-      const { data: userData } = await supabase.auth.getUser();
-      if (startDate && endDate && userData.user) {
-        const { data } = await supabase
-          .from('food_purchases')
-          .select('*')
-          .eq('user_id', userData.user.id)
-          .order('date', { ascending: true });
-
-        if (data) {
-          setFoodPurchases(data);
-        }
-      }
-    };
-
-    loadInitialData();
+    fetchFoodPurchases();
   }, []);
-
-
-  const ensureDateRangeInDB = async () => {
-    if (!startDate || !endDate) {
-      alert('Please select both start and end dates');
-      return;
-    }
-
-    setLoading(true);
-    const { data: userData } = await supabase.auth.getUser();
-    
-    if (!userData.user) {
-      setLoading(false);
-      return;
-    }
-
-    // Get all dates in the range
-    const dates = eachDayOfInterval({
-      start: parse(startDate, 'yyyy-MM-dd', new Date()),
-      end: parse(endDate, 'yyyy-MM-dd', new Date()),
-    });
-
-    // Get existing records for this date range
-    const { data: existingData } = await supabase
-      .from('food_purchases')
-      .select('*')
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .eq('user_id', userData.user.id);
-
-    // Find dates that don't have records
-    const existingDates = new Set(existingData?.map(d => d.date) || []);
-    const newDates = dates.filter(date => 
-      !existingDates.has(format(date, 'yyyy-MM-dd'))
-    );
-
-    // Create new records for missing dates
-    if (newDates.length > 0) {
-      const newRecords = newDates.map(date => ({
-        date: format(date, 'yyyy-MM-dd'),
-        breakfast: false,
-        dinner: false,
-        user_id: userData.user.id
-      }));
-
-      const { error } = await supabase
-        .from('food_purchases')
-        .insert(newRecords);
-
-      if (error) {
-        console.error('Error inserting new records:', error);
-        alert('Error creating new records');
-      }
-    }
-
-    // Fetch all records again
-    await fetchFoodPurchases();
-    setLoading(false);
-  };
 
   const fetchFoodPurchases = async () => {
     setLoading(true);
@@ -118,15 +43,15 @@ function FoodPurchaseTracker() {
     const { data, error } = await supabase
       .from('food_purchases')
       .select('*')
-      .gte('date', startDate)
-      .lte('date', endDate)
       .eq('user_id', userData.user.id)
       .order('date', { ascending: true });
 
     if (error) {
       console.error('Error fetching food purchases:', error);
-    } else {
-      setFoodPurchases(data || []);
+    } else if (data && data.length > 0) {
+      setFoodPurchases(data);
+      setStartDate(data[0].date);
+      setEndDate(data[data.length - 1].date);
     }
     setLoading(false);
   };
@@ -158,20 +83,18 @@ function FoodPurchaseTracker() {
     ) {
       const { data: userData } = await supabase.auth.getUser();
       if (userData.user) {
-        // Delete all records in the date range
-        await supabase
+        // Reset all records to false
+        const { error } = await supabase
           .from('food_purchases')
-          .delete()
-          .gte('date', startDate)
-          .lte('date', endDate)
+          .update({ breakfast: false, dinner: false })
           .eq('user_id', userData.user.id);
-      }
 
-      setStartDate('');
-      setEndDate('');
-      setFoodPurchases([]);
-      localStorage.removeItem('startDate');
-      localStorage.removeItem('endDate');
+        if (error) {
+          console.error('Error resetting food purchases:', error);
+        } else {
+          await fetchFoodPurchases(); // Refetch the data after reset
+        }
+      }
     }
   };
 
@@ -179,14 +102,15 @@ function FoodPurchaseTracker() {
     window.print();
   };
 
-  const totalBreakfasts = foodPurchases.filter((p) => p.breakfast).length;
-  const totalDinners = foodPurchases.filter((p) => p.dinner).length;
-  const totalMeals = totalBreakfasts + totalDinners;
-return (
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+
+  return (
     <div className="container mx-auto p-4 max-w-4xl">
       <h1 className="text-3xl font-bold mb-4">Food Purchase Tracker</h1>
       
-      {/* New Summary Cards Section */}
+      {/* Summary Cards Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-4 border-l-4 border-blue-500">
           <h2 className="text-sm font-medium text-gray-500 uppercase">Total Meals Selected</h2>
@@ -206,39 +130,12 @@ return (
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-4 items-end">
-        <div>
-          <label htmlFor="startDate" className="block text-sm font-medium text-gray-700">
-            Start Date
-          </label>
-          <input
-            type="date"
-            id="startDate"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
-          />
-        </div>
-        <div>
-          <label htmlFor="endDate" className="block text-sm font-medium text-gray-700">
-            End Date
-          </label>
-          <input
-            type="date"
-            id="endDate"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
-          />
-        </div>
-        <button
-          onClick={ensureDateRangeInDB}
-          disabled={loading}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-400"
-        >
-          <Calendar className="mr-2 h-4 w-4" />
-          {loading ? 'Processing...' : 'Select Date Range'}
-        </button>
+      {/* Date Range Display */}
+      <div className="mb-4">
+        <p className="text-sm font-medium text-gray-700">
+          Showing data from {format(parse(startDate, 'yyyy-MM-dd', new Date()), 'MMM dd, yyyy')} 
+          to {format(parse(endDate, 'yyyy-MM-dd', new Date()), 'MMM dd, yyyy')}
+        </p>
       </div>
 
       {/* Warning message when over budget */}
